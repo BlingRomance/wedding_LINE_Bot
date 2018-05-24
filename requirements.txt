@@ -1,0 +1,6 @@
+line-bot-sdk
+flask
+imgurpython
+mysqlclient
+requests
+Pillow
