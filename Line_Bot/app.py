@@ -177,13 +177,13 @@ def handle_message(event):
                 event.reply_token,
                 TextSendMessage(text = "創意構想\n軟體設計：新郎 Bling\n\n圖片協助：新娘 Beth\n\n視窗協助：煥博 Chris\n\n合成協助：瑜芳 Fish\n\n贊助廠商：\nhttps://shopee.tw/emilychien0514")
             )
-        '''
+        
         elif event.message.text == "限時活動":
             line_bot_api.reply_message(
                 event.reply_token,
                 TextSendMessage(text = "https://admin-official.line.me/")
             )
-
+        '''
         elif event.message.text == "問答名單":
             line_bot_api.reply_message(
                 event.reply_token,
