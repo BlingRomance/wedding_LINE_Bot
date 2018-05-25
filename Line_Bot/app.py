@@ -22,10 +22,12 @@ import time
 
 app = Flask(__name__)
 
+# The line bot access token and webhook id
 channel_access_token = '{bot_access_token}'
 line_bot_api = LineBotApi(channel_access_token)
 handler = WebhookHandler('{bot_webhook_id}')
 
+# The imgur client id, client secret, access token and refresh token
 client_id = '{imgur_client_id}'
 client_secret = '{imgur_client_secret}'
 access_token = '{imgur_access_token}'
@@ -104,7 +106,7 @@ def handle_message(event):
             # line user name
             profile = line_bot_api.get_profile(event.source.user_id)
             display_name = profile.display_name
-            # 清除使用者名稱的特殊符號
+            # Clear emojifor for user name
             emoji_pattern = re.compile("["
                 u"\U0001F600-\U0001F64F"  # emoticons
                 u"\U0001F300-\U0001F5FF"  # symbols & pictographs
@@ -191,7 +193,7 @@ def handle_message(event):
     if isinstance(event.message, ImageMessage):
         ext = 'jpg'
         message_content = line_bot_api.get_message_content(event.message.id)
-        #將上傳的照片命名並儲存
+        # Rename and save uploaded picture
         with tempfile.NamedTemporaryFile(dir = static_tmp_path, prefix = ext + '-', delete = False) as tf:
             for chunk in message_content.iter_content():
                 tf.write(chunk)
@@ -204,39 +206,40 @@ def handle_message(event):
 
         cover_img = Image.open(path)
         region = cover_img
-        # 判斷使用者上傳的照片是直/橫
-        # 隨機使用照片樣板
-        # 上傳為直
+        # Uploaded picture -> straight/horizontal
+        # Randomly use picture templates
+        # Uploaded is straight
         if cover_img.size[1] > cover_img.size[0]:
             index = random.randint(0, 1)
-            # 直1
             if index == 0:
                 base_img = Image.open('/tmp/FeuDqBE.jpg')
                 box = (90, 105, 652, 975)
-            # 直2
+
             if index == 1:
                 base_img = Image.open('/tmp/jjkP1OO.jpg')
                 box = (830, 114, 1393, 983)
-        # 上傳為橫
+        # Uploaded is horizontal
         else:
             index = random.randint(0, 2)
-            # 橫1
+
             if index == 0:
                 base_img = Image.open('/tmp/ryUiTQb.jpg')
                 box = (931, 435, 1802, 999)
-            # 橫2
+
             if index == 1:
                 base_img = Image.open('/tmp/cUiNFmq.jpg')
                 box = (108, 517, 978, 1078)
-            # 橫3
+
             if index == 2:
                 base_img = Image.open('/tmp/yK2mEQK.jpg')
                 box = (106, 1290, 970, 1847)
-        # 利用PIL調整上傳的照片大小並與照片樣板做合成
+
+        # Use PIL to resize picture and photomontage
         region = region.resize((box[2] - box[0], box[3] - box[1]))
         base_img.paste(region, box)
         base_img.save(path)
-        # 將合成完之照片上傳至imgur讓投影做使用
+
+        # Upload picture to imgur
         try:
             client = ImgurClient(client_id, client_secret, access_token, refresh_token)
             config = {
@@ -250,7 +253,8 @@ def handle_message(event):
             os.remove(dist_path)
         except:
             pass
-        # 將合成完之照片回傳給使用者
+
+        # Reply picture to user
         wedding_cover = client.get_album_images('n7W1A')
         for send_cover in wedding_cover:
             if send_cover.name == dist_name:
@@ -259,7 +263,8 @@ def handle_message(event):
                     preview_image_url = send_cover.link
                 )
             line_bot_api.reply_message(event.reply_token, message)
-        # 將合成完之照片網址寫入資料庫讓投影做使用
+
+        # Insert picture link from imgur to database
         try:
             db = MySQLdb.connect(host = '{sql_server_ip}', port = 3306, user = 'bnb_python', passwd = '12345678', db = 'bnb_wedding', charset = 'utf8mb4')
             cursor = db.cursor()
@@ -272,20 +277,15 @@ def handle_message(event):
         db.close()
 
 if __name__ == "__main__":
-    # 下載儲存照片樣板
-    # 直1
+    # Download picture templates
     image_url = "https://i.imgur.com/FeuDqBE.jpg"
     urlretrieve(image_url, '/tmp/FeuDqBE.jpg')
-    # 直2
     image_url = "https://i.imgur.com/jjkP1OO.jpg"
     urlretrieve(image_url, '/tmp/jjkP1OO.jpg')
-    # 橫1
     image_url = "https://i.imgur.com/ryUiTQb.jpg"
     urlretrieve(image_url, '/tmp/ryUiTQb.jpg')
-    # 橫2
     image_url = "https://i.imgur.com/cUiNFmq.jpg"
     urlretrieve(image_url, '/tmp/cUiNFmq.jpg')
-    # 橫3
     image_url = "https://i.imgur.com/yK2mEQK.jpg"
     urlretrieve(image_url, '/tmp/yK2mEQK.jpg')
 
@@ -293,4 +293,3 @@ if __name__ == "__main__":
     wedding_photos = client.get_album_images('Yjwsl')
 
     app.run(host = '0.0.0.0', port = int(os.environ['PORT']))
-    #app.run()
