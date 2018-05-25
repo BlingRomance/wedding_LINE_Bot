@@ -1,2 +1,2 @@
-*.py linguist-language=Python/C#
-*.cs linguist-language=Python/C#
+*.py linguist-language=Python
+*.cs linguist-language=Python
