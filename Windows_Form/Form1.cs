@@ -3,25 +3,40 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 using MySql.Data.MySqlClient;
+using System.Threading.Tasks;
+using System.IO;
 
 namespace BingBride
 {
     public partial class Form1 : Form
     {
-        int speed = 6;
-        List<string> content = new List<string>();
-        int count = 0;
-        Random random1 = new Random();
+        // 定義常數
+        private const int DEFAULT_SPEED = 6;
+        private const int TIMER_INTERVAL = 20;
+        private const int PICTURE_TIMER_INTERVAL = 5000;
+        private const string CONNECTION_STRING = "server={sql_server_ip}; port=3306; user=bnb_c; password=12345678; database=bnb_wedding";
+        
+        private readonly int speed = DEFAULT_SPEED;
+        private readonly List<string> blessingContents = new List<string>();
+        private readonly List<string> imageLinks = new List<string>();
+        private readonly List<string> localImages = new List<string>();
+        private readonly Random random = new Random();
+        
+        private int blessingCount = 0;
+        private int imageCount = 0;
+        private int currentImageIndex = 0;
+        private int currentMusicNumber = 0;
+        private int playStatus = 0;
+        private string basePath;
+
         PictureBox picture_box = new PictureBox();
         int imgur_count = 0;
         List<string> link = new List<string>();
         int r = 0;
-        List<string> local_img = new List<string>();
         String path = "";
         AxWMPLib.AxWindowsMediaPlayer music_player;
         AxWMPLib.AxWindowsMediaPlayer media_player;
         int rnum = 0;
-        int play_status = 0;
 
         /**
          * Initialization and create picture_box, media_player and music_player.
@@ -36,32 +51,35 @@ namespace BingBride
             InitializeComponent();
             this.DoubleBuffered = true;
 
-            path = System.IO.Directory.GetCurrentDirectory();
-
-            // add defult picture
-            local_img.Add(path + @"\bnb\2jXNJAo.jpg");
-            local_img.Add(path + @"\bnb\zVgqz9n.jpg");
-            
-            picture_box = new System.Windows.Forms.PictureBox();
-            picture_box.Location = new Point(0, label1.Height + 10);
-            picture_box.Size = new System.Drawing.Size(Screen.PrimaryScreen.Bounds.Width, Screen.PrimaryScreen.Bounds.Height - (label1.Height + 50));
-            picture_box.SizeMode = PictureBoxSizeMode.Zoom;
-            Controls.Add(picture_box);
-            
-            media_player = new AxWMPLib.AxWindowsMediaPlayer();
-            media_player.Location = new Point(0, label1.Height + 10);
-            media_player.Size = new System.Drawing.Size(Screen.PrimaryScreen.Bounds.Width, Screen.PrimaryScreen.Bounds.Height - 25);
-            media_player.KeyDownEvent += axWindowsMediaPlayer_KeyDownEvent;
-            Controls.Add(media_player);
-            media_player.Visible = false;
-
-            music_player = new AxWMPLib.AxWindowsMediaPlayer();
-            music_player.Location = new Point(-Screen.PrimaryScreen.Bounds.Width, -Screen.PrimaryScreen.Bounds.Height);
-            music_player.KeyDownEvent += axWindowsMediaPlayer_KeyDownEvent;
-            music_player.MediaChange += axWindowsMediaPlayer_MediaChange;
-            Controls.Add(music_player);
-
+            basePath = System.IO.Directory.GetCurrentDirectory();
+            InitializeImages();
+            InitializeMediaControls();
             this.ShowInTaskbar = false;
+        }
+
+        private void InitializeImages()
+        {
+            localImages.Add(Path.Combine(basePath, @"bnb\2jXNJAo.jpg"));
+            localImages.Add(Path.Combine(basePath, @"bnb\zVgqz9n.jpg"));
+        }
+
+        private void InitializeMediaControls()
+        {
+            InitializePictureBox();
+            InitializeMediaPlayer();
+            InitializeMusicPlayer();
+        }
+
+        private void InitializePictureBox()
+        {
+            picture_box = new PictureBox
+            {
+                Location = new Point(0, label1.Height + 10),
+                Size = new Size(Screen.PrimaryScreen.Bounds.Width, 
+                              Screen.PrimaryScreen.Bounds.Height - (label1.Height + 50)),
+                SizeMode = PictureBoxSizeMode.Zoom
+            };
+            Controls.Add(picture_box);
         }
 
         /**
@@ -72,9 +90,9 @@ namespace BingBride
             timer2.Interval = 20;
             timer2.Start();
 
-            rnum = random1.Next(1, 4);
+            rnum = random.Next(1, 4);
             Console.WriteLine(rnum);
-            music_player.URL = path + @"\music\" + rnum.ToString() + @".mp3";
+            music_player.URL = Path.Combine(basePath, @"music\" + rnum.ToString() + @".mp3");
             music_player.settings.volume = 100;
 
             timer1.Interval = 5000;
@@ -86,7 +104,6 @@ namespace BingBride
          */
         private void timer1_Tick(object sender, EventArgs e)
         {
-
             if (imgur_count != 0)
             {
                 picture_box.LoadAsync(link[imgur_count - 1]);
@@ -104,7 +121,7 @@ namespace BingBride
                     {
                         r = 1;
                     }
-                    picture_box.LoadAsync(local_img[r]);
+                    picture_box.LoadAsync(localImages[r]);
                 }
                 catch (Exception ex)
                 {
@@ -113,33 +130,7 @@ namespace BingBride
 
                 link.Clear();
 
-                MySqlConnection conn_image = new MySqlConnection("server={sql_server_ip}; port=3306; user=bnb_c; password=12345678; database=bnb_wedding");
-                try
-                {
-                    conn_image.Open();
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine(ex.ToString());
-                }
-                String blessing_image = "SELECT * FROM wedding_image WHERE wedding_image_timestamp >= '" + DateTime.Now.ToString("yyyy-MM-dd") + "'";
-                MySqlCommand blessing_command_image = new MySqlCommand(blessing_image, conn_image);
-
-                try
-                {
-                    MySqlDataReader blessing_reader_image = blessing_command_image.ExecuteReader();
-                    while (blessing_reader_image.Read())
-                    {
-                        link.Add(blessing_reader_image.GetString(1));
-                        imgur_count++;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine(ex.ToString());
-                }
-
-                conn_image.Close();
+                LoadImagesFromDatabase().Wait();
             }
         }
 
@@ -148,59 +139,34 @@ namespace BingBride
          */
         private void timer2_Tick(object sender, EventArgs e)
         {
-            if (play_status == 1)
+            if (playStatus == 1)
             {
                 music_player.Ctlcontrols.play();
-                play_status = 0;
+                playStatus = 0;
             }
 
             if (label1.Left < 0 && (Math.Abs(label1.Left) > label1.Width))
             {
                 label1.Left = this.Width;
-                if (count <= content.Count && count != 0)
+                if (blessingCount <= blessingContents.Count && blessingCount != 0)
                 {
-                    label1.Text = content[count - 1];
-                    count--;
+                    label1.Text = blessingContents[blessingCount - 1];
+                    blessingCount--;
                 }
                 else
                 {
                     try
                     {
-                        label1.Text = content[random1.Next(0, content.Count)];
+                        label1.Text = blessingContents[random.Next(0, blessingContents.Count)];
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine(ex.ToString());
                     }
                     
-                    content.Clear();
+                    blessingContents.Clear();
 
-                    MySqlConnection conn = new MySqlConnection("server={sql_server_ip}; port=3306; user=bnb_c; password=12345678; database=bnb_wedding");
-                    try
-                    {
-                        conn.Open();
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine(ex.ToString());
-                    }
-                    String blessing_text = "SELECT * FROM wedding_blessing WHERE wedding_blessing_timestamp >= '" + DateTime.Now.ToString("yyyy-MM-dd") + "'";
-                    MySqlCommand blessing_command = new MySqlCommand(blessing_text, conn);
-                    try
-                    {
-                        MySqlDataReader blessing_reader = blessing_command.ExecuteReader();
-                        while (blessing_reader.Read())
-                        {
-                            content.Add(blessing_reader.GetString(1) + "：" + blessing_reader.GetString(2));
-                            count++;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine(ex.ToString());
-                    }
-                    
-                    conn.Close();
+                    LoadBlessingsFromDatabase().Wait();
                 }
                 
                 label1.ForeColor = Color.Red;
@@ -246,7 +212,7 @@ namespace BingBride
                         Console.WriteLine(ex.ToString());
                     }
                     media_player.Visible = false;
-                    music_player.URL = path + @"\music\" + random1.Next(1, 4).ToString() + @".mp3";
+                    music_player.URL = Path.Combine(basePath, @"music\" + random.Next(1, 4).ToString() + @".mp3");
                     music_player.Ctlcontrols.play();
                     break;
 
@@ -261,13 +227,13 @@ namespace BingBride
                     }
                     picture_box.Visible = false;
                     media_player.Visible = true;
-                    media_player.URL = path + @"\bnb\WEDDING.wmv";
+                    media_player.URL = Path.Combine(basePath, @"bnb\WEDDING.wmv");
                     break;
 
                 case Keys.F5:
                     music_player.Ctlcontrols.stop();
-                    music_player.URL = path + @"\music\Wherever_You_Go.mp3";
-                    play_status = 1;
+                    music_player.URL = Path.Combine(basePath, @"music\Wherever_You_Go.mp3");
+                    playStatus = 1;
                     break;
 
                 case Keys.F12:
@@ -281,7 +247,7 @@ namespace BingBride
                     }
                     picture_box.Visible = false;
                     media_player.Visible = true;
-                    media_player.URL = path + @"\bnb\blessing.wmv";
+                    media_player.URL = Path.Combine(basePath, @"bnb\blessing.wmv");
                     break;
             }
             
@@ -324,7 +290,7 @@ namespace BingBride
                         Console.WriteLine(ex.ToString());
                     }
                     media_player.Visible = false;
-                    music_player.URL = path + @"\music\" + random1.Next(1, 4).ToString() + @".mp3";
+                    music_player.URL = Path.Combine(basePath, @"music\" + random.Next(1, 4).ToString() + @".mp3");
                     music_player.Ctlcontrols.play();
                     break;
 
@@ -339,13 +305,13 @@ namespace BingBride
                     }
                     picture_box.Visible = false;
                     media_player.Visible = true;
-                    media_player.URL = path + @"\bnb\WEDDING.wmv";
+                    media_player.URL = Path.Combine(basePath, @"bnb\WEDDING.wmv");
                     break;
 
                 case 116: // F5
                     music_player.Ctlcontrols.stop();
-                    music_player.URL = path + @"\music\Wherever_You_Go.mp3";
-                    play_status = 1;
+                    music_player.URL = Path.Combine(basePath, @"music\Wherever_You_Go.mp3");
+                    playStatus = 1;
                     break;
 
                 case 121: // F10
@@ -362,7 +328,7 @@ namespace BingBride
                     }
                     picture_box.Visible = false;
                     media_player.Visible = true;
-                    media_player.URL = path + @"\bnb\blessing.wmv";
+                    media_player.URL = Path.Combine(basePath, @"bnb\blessing.wmv");
                     break;
             }
         }
@@ -371,15 +337,70 @@ namespace BingBride
         {
             if (music_player.status == "完成")
             {
-                int num = random1.Next(1, 4);
+                int num = random.Next(1, 4);
                 while (rnum == num)
                 {
-                    num = random1.Next(1, 4);
+                    num = random.Next(1, 4);
                 }
                 rnum = num;
                 music_player.Ctlcontrols.stop();
-                music_player.URL = path + @"\music\" + rnum.ToString() + @".mp3";
-                play_status = 1;
+                music_player.URL = Path.Combine(basePath, @"music\" + rnum.ToString() + @".mp3");
+                playStatus = 1;
+            }
+        }
+
+        private async Task LoadBlessingsFromDatabase()
+        {
+            using (var connection = new MySqlConnection(CONNECTION_STRING))
+            {
+                try
+                {
+                    await connection.OpenAsync();
+                    string query = $"SELECT * FROM wedding_blessing WHERE wedding_blessing_timestamp >= '{DateTime.Now:yyyy-MM-dd}'";
+                    
+                    using (var command = new MySqlCommand(query, connection))
+                    using (var reader = await command.ExecuteReaderAsync())
+                    {
+                        blessingContents.Clear();
+                        while (await reader.ReadAsync())
+                        {
+                            blessingContents.Add($"{reader.GetString(1)}：{reader.GetString(2)}");
+                            blessingCount++;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Database error: {ex.Message}");
+                    // 可以考慮添加更好的錯誤處理機制
+                }
+            }
+        }
+
+        private async Task LoadImagesFromDatabase()
+        {
+            using (var connection = new MySqlConnection(CONNECTION_STRING))
+            {
+                try
+                {
+                    await connection.OpenAsync();
+                    string query = $"SELECT * FROM wedding_image WHERE wedding_image_timestamp >= '{DateTime.Now:yyyy-MM-dd}'";
+                    
+                    using (var command = new MySqlCommand(query, connection))
+                    using (var reader = await command.ExecuteReaderAsync())
+                    {
+                        imageLinks.Clear();
+                        while (await reader.ReadAsync())
+                        {
+                            imageLinks.Add(reader.GetString(1));
+                            imageCount++;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Database error: {ex.Message}");
+                }
             }
         }
     }
