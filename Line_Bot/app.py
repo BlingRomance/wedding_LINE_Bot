@@ -19,21 +19,82 @@ import tempfile
 import MySQLdb
 import re
 import time
+from config import (
+    CHANNEL_ACCESS_TOKEN,
+    CHANNEL_SECRET,
+    IMGUR_CLIENT_ID,
+    IMGUR_CLIENT_SECRET,
+    IMGUR_ACCESS_TOKEN,
+    IMGUR_REFRESH_TOKEN,
+    DB_CONFIG,
+    TEMPLATE_IMAGES
+)
 
 app = Flask(__name__)
 
-# The line bot access token and webhook id
-channel_access_token = '{bot_access_token}'
-line_bot_api = LineBotApi(channel_access_token)
-handler = WebhookHandler('{bot_webhook_id}')
+# Line Bot 初始化
+line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(CHANNEL_SECRET)
 
-# The imgur client id, client secret, access token and refresh token
-client_id = '{imgur_client_id}'
-client_secret = '{imgur_client_secret}'
-access_token = '{imgur_access_token}'
-refresh_token = '{imgur_refresh_token}'
+# Imgur 客戶端初始化
+imgur_client = ImgurClient(
+    IMGUR_CLIENT_ID,
+    IMGUR_CLIENT_SECRET,
+    IMGUR_ACCESS_TOKEN,
+    IMGUR_REFRESH_TOKEN
+)
 
-static_tmp_path = os.path.join(os.path.dirname(__file__), '/tmp')
+static_tmp_path = os.path.join(os.path.dirname(__file__), 'tmp')
+os.makedirs(static_tmp_path, exist_ok=True)
+
+def get_db_connection():
+    """建立資料庫連接"""
+    return MySQLdb.connect(**DB_CONFIG)
+
+def save_blessing_to_db(name, content):
+    """儲存祝福訊息到資料庫"""
+    try:
+        with get_db_connection() as db:
+            cursor = db.cursor()
+            sql = "INSERT INTO wedding_blessing(wedding_blessing_name, wedding_blessing_content) VALUES(%s, %s)"
+            cursor.execute(sql, (name, content))
+            db.commit()
+        return True
+    except Exception as e:
+        print(f"資料庫錯誤: {e}")
+        return False
+
+def get_seat_number(name):
+    """查詢座位號碼"""
+    try:
+        with get_db_connection() as db:
+            cursor = db.cursor()
+            sql = "SELECT wedding_sit_no FROM wedding_sit WHERE wedding_sit_name = %s"
+            cursor.execute(sql, (name,))
+            return cursor.fetchone()
+    except Exception as e:
+        print(f"資料庫錯誤: {e}")
+        return None
+
+def process_image(image_path):
+    """處理上傳的圖片"""
+    cover_img = Image.open(image_path)
+    is_portrait = cover_img.size[1] > cover_img.size[0]
+    
+    # 選擇適當的模板
+    if is_portrait:
+        template = random.choice(TEMPLATE_IMAGES['portrait'])
+    else:
+        template = random.choice(TEMPLATE_IMAGES['landscape'])
+    
+    base_img = Image.open(template['path'])
+    region = cover_img.resize((
+        template['box'][2] - template['box'][0],
+        template['box'][3] - template['box'][1]
+    ))
+    base_img.paste(region, template['box'])
+    base_img.save(image_path)
+    return image_path
 
 @app.route("/callback", methods = ['POST'])
 def callback():
@@ -54,242 +115,169 @@ def callback():
 
 @handler.add(MessageEvent, message = (TextMessage, ImageMessage))
 def handle_message(event):
-    # receive key word -> send message or do something
     if isinstance(event.message, TextMessage):
-        if event.message.text == "甜蜜時刻":
-            index = random.randint(0, len(wedding_photos) - 1)
-            url = wedding_photos[index].link
+        handle_text_message(event)
+    elif isinstance(event.message, ImageMessage):
+        handle_image_message(event)
 
-            message = ImageSendMessage(
-                original_content_url = url,
-                preview_image_url = url
-            )
-            line_bot_api.reply_message(event.reply_token, message)
-
-        elif event.message.text == "美好當下":
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text = "快上傳您的自拍照或與親友的合照，您的照片會顯示在大螢幕上喔！")
-            )
-
-        elif event.message.text == "祝福新人":
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text = "請輸入關鍵字(YA)與祝福話，您的祝福會顯示在大螢幕上喔！\n\n輸入範例：YA新婚快樂")
-            )
-
-        elif str(event.message.text).find("ya") != -1 or str(event.message.text).find("YA") != -1 or str(event.message.text).find("Ya") != -1 or str(event.message.text).find("yA") != -1:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text = "謝謝您的祝福，大螢幕即將顯示您的祝福！！")
-            )
-
-            try:
-                blessing_1, blessing_2 = str(event.message.text).split('ya', 1)
-            except Exception as e:
-                pass
-
-            try:
-                blessing_1, blessing_2 = str(event.message.text).split('YA', 1)
-            except Exception as e:
-                pass
-
-            try:
-                blessing_1, blessing_2 = str(event.message.text).split('Ya', 1)
-            except Exception as e:
-                pass
-
-            try:
-                blessing_1, blessing_2 = str(event.message.text).split('yA', 1)
-            except Exception as e:
-                pass
-            # line user name
-            profile = line_bot_api.get_profile(event.source.user_id)
-            display_name = profile.display_name
-            # Clear emojifor for user name
-            emoji_pattern = re.compile("["
-                u"\U0001F600-\U0001F64F"  # emoticons
-                u"\U0001F300-\U0001F5FF"  # symbols & pictographs
-                u"\U0001F680-\U0001F6FF"  # transport & map symbols
-                u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
-                                    "]+", flags = re.UNICODE)
-            display_name = emoji_pattern.sub(r'', display_name)
-
-            try:
-                db = MySQLdb.connect(host = '{sql_server_ip}', port = 3306, user = 'bnb_python', passwd = '12345678', db = 'bnb_wedding', charset = 'utf8mb4')
-                cursor = db.cursor()
-                sql = """INSERT INTO wedding_blessing(wedding_blessing_name, wedding_blessing_content) VALUES('""" + display_name + """', '""" +  blessing_2 + """')"""
-                cursor.execute(sql)
-                db.commit()
-            except:
-                db.rollback()
-
-            db.close()
-
-        elif event.message.text == "愛的問答":
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text = "https://docs.google.com/")
-            )
-
-        elif event.message.text == "專屬位子":
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text = "請輸入關鍵字(T)與全名\n\n輸入範例：T簡紹庭")
-            )
-
-        elif str(event.message.text).find("T") != -1 or str(event.message.text).find("t") != -1:
-            try:
-                sit_1, sit_2 = str(event.message.text).split('T', 1)
-            except Exception as e:
-                pass
-
-            try:
-                sit_1, sit_2 = str(event.message.text).split('t', 1)
-            except Exception as e:
-                pass
-
-            try:
-                db = MySQLdb.connect(host = '{sql_server_ip}', port = 3306, user = 'bnb_python', passwd = '12345678', db = 'bnb_wedding', charset = 'utf8mb4')
-                cursor = db.cursor()
-                sql = """SELECT wedding_sit_no FROM bnb_wedding.wedding_sit WHERE wedding_sit_name = '""" + sit_2 + """'"""
-                cursor.execute(sql)
-                tup = cursor.fetchone()
-
-                if tup != None:
-                    sit_no =  ','.join('%s' %id for id in tup)
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text = sit_2 + " 您好，您的座位在第 " + sit_no + " 桌")
-                    )
-                else:
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(text = "請洽詢接待人員，將有專人為您帶位")
-                    )
-            except:
-                db.rollback()
-
-            db.close()
-
-        elif event.message.text == "創意設計":
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text = "創意構想\n軟體設計：新郎 Bling\n\n圖片協助：新娘 Beth\n\n視窗協助：煥博 Chris\n\n合成協助：瑜芳 Fish\n\n贊助廠商：\nhttps://shopee.tw/emilychien0514")
-            )
-        
-        elif event.message.text == "限時活動":
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text = "https://admin-official.line.me/")
-            )
-        '''
-        elif event.message.text == "問答名單":
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text = "https://docs.google.com/")
-            )
-        '''
-    if isinstance(event.message, ImageMessage):
-        ext = 'jpg'
-        message_content = line_bot_api.get_message_content(event.message.id)
-        # Rename and save uploaded picture
-        with tempfile.NamedTemporaryFile(dir = static_tmp_path, prefix = ext + '-', delete = False) as tf:
-            for chunk in message_content.iter_content():
-                tf.write(chunk)
-            tempfile_path = tf.name
-
-        dist_path = tempfile_path + '.' + ext
-        dist_name = os.path.basename(dist_path)
-        os.rename(tempfile_path, dist_path)
-        path = os.path.join('/tmp', dist_name)
-
-        cover_img = Image.open(path)
-        region = cover_img
-        # Uploaded picture -> straight/horizontal
-        # Randomly use picture templates
-        # Uploaded is straight
-        if cover_img.size[1] > cover_img.size[0]:
-            index = random.randint(0, 1)
-            if index == 0:
-                base_img = Image.open('/tmp/FeuDqBE.jpg')
-                box = (90, 105, 652, 975)
-
-            if index == 1:
-                base_img = Image.open('/tmp/jjkP1OO.jpg')
-                box = (830, 114, 1393, 983)
-        # Uploaded is horizontal
-        else:
-            index = random.randint(0, 2)
-
-            if index == 0:
-                base_img = Image.open('/tmp/ryUiTQb.jpg')
-                box = (931, 435, 1802, 999)
-
-            if index == 1:
-                base_img = Image.open('/tmp/cUiNFmq.jpg')
-                box = (108, 517, 978, 1078)
-
-            if index == 2:
-                base_img = Image.open('/tmp/yK2mEQK.jpg')
-                box = (106, 1290, 970, 1847)
-
-        # Use PIL to resize picture and photomontage
-        region = region.resize((box[2] - box[0], box[3] - box[1]))
-        base_img.paste(region, box)
-        base_img.save(path)
-
-        # Upload picture to imgur
+def handle_text_message(event):
+    text = event.message.text.lower()
+    
+    if text == "甜蜜時刻":
+        send_random_wedding_photo(event)
+    elif text == "美好當下":
+        send_upload_instruction(event)
+    elif text == "祝福新人":
+        send_blessing_instruction(event)
+    elif "ya" in text:
+        handle_blessing(event)
+    elif text == "愛的問答":
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text = "https://docs.google.com/")
+        )
+    elif text == "專屬位子":
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text = "請輸入關鍵字(T)與全名\n\n輸入範例：T簡紹庭")
+        )
+    elif str(text).find("T") != -1 or str(text).find("t") != -1:
         try:
-            client = ImgurClient(client_id, client_secret, access_token, refresh_token)
-            config = {
-                'album': 'n7W1A',
-                'name': dist_name,
-                'title': time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-                'description': ''
-            }
-            
-            client.upload_from_path(path, config = config, anon = False)
-            os.remove(dist_path)
-        except:
+            sit_1, sit_2 = str(text).split('T', 1)
+        except Exception as e:
             pass
 
-        # Reply picture to user
-        wedding_cover = client.get_album_images('n7W1A')
-        for send_cover in wedding_cover:
-            if send_cover.name == dist_name:
-                message = ImageSendMessage(
-                    original_content_url = send_cover.link,
-                    preview_image_url = send_cover.link
-                )
-            line_bot_api.reply_message(event.reply_token, message)
-
-        # Insert picture link from imgur to database
         try:
-            db = MySQLdb.connect(host = '{sql_server_ip}', port = 3306, user = 'bnb_python', passwd = '12345678', db = 'bnb_wedding', charset = 'utf8mb4')
+            sit_1, sit_2 = str(text).split('t', 1)
+        except Exception as e:
+            pass
+
+        try:
+            db = MySQLdb.connect(host = DB_CONFIG['host'], port = 3306, user = 'bnb_python', passwd = '12345678', db = 'bnb_wedding', charset = 'utf8mb4')
             cursor = db.cursor()
-            sql = """INSERT INTO wedding_image(wedding_image_link) VALUES('""" + send_cover.link + """')"""
+            sql = """SELECT wedding_sit_no FROM bnb_wedding.wedding_sit WHERE wedding_sit_name = '""" + sit_2 + """'"""
             cursor.execute(sql)
-            db.commit()
+            tup = cursor.fetchone()
+
+            if tup != None:
+                sit_no =  ','.join('%s' %id for id in tup)
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text = sit_2 + " 您好，您的座位在第 " + sit_no + " 桌")
+                )
+            else:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text = "請洽詢接待人員，將有專人為您帶位")
+                )
         except:
             db.rollback()
 
         db.close()
+    elif text == "創意設計":
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text = "創意構想\n軟體設計：新郎 Bling\n\n圖片協助：新娘 Beth\n\n視窗協助：煥博 Chris\n\n合成協助：瑜芳 Fish\n\n贊助廠商：\nhttps://shopee.tw/emilychien0514")
+        )
+    elif text == "限時活動":
+        line_bot_api.reply_message(
+            event.reply_token,
+            TextSendMessage(text = "https://admin-official.line.me/")
+        )
+
+def handle_image_message(event):
+    ext = 'jpg'
+    message_content = line_bot_api.get_message_content(event.message.id)
+    # Rename and save uploaded picture
+    with tempfile.NamedTemporaryFile(dir = static_tmp_path, prefix = ext + '-', delete = False) as tf:
+        for chunk in message_content.iter_content():
+            tf.write(chunk)
+        tempfile_path = tf.name
+
+    dist_path = tempfile_path + '.' + ext
+    dist_name = os.path.basename(dist_path)
+    os.rename(tempfile_path, dist_path)
+    path = os.path.join('/tmp', dist_name)
+
+    cover_img = Image.open(path)
+    region = cover_img
+    # Uploaded picture -> straight/horizontal
+    # Randomly use picture templates
+    # Uploaded is straight
+    if cover_img.size[1] > cover_img.size[0]:
+        index = random.randint(0, 1)
+        if index == 0:
+            base_img = Image.open('/tmp/FeuDqBE.jpg')
+            box = (90, 105, 652, 975)
+
+        if index == 1:
+            base_img = Image.open('/tmp/jjkP1OO.jpg')
+            box = (830, 114, 1393, 983)
+    # Uploaded is horizontal
+    else:
+        index = random.randint(0, 2)
+
+        if index == 0:
+            base_img = Image.open('/tmp/ryUiTQb.jpg')
+            box = (931, 435, 1802, 999)
+
+        if index == 1:
+            base_img = Image.open('/tmp/cUiNFmq.jpg')
+            box = (108, 517, 978, 1078)
+
+        if index == 2:
+            base_img = Image.open('/tmp/yK2mEQK.jpg')
+            box = (106, 1290, 970, 1847)
+
+    # Use PIL to resize picture and photomontage
+    region = region.resize((box[2] - box[0], box[3] - box[1]))
+    base_img.paste(region, box)
+    base_img.save(path)
+
+    # Upload picture to imgur
+    try:
+        client = ImgurClient(IMGUR_CLIENT_ID, IMGUR_CLIENT_SECRET, IMGUR_ACCESS_TOKEN, IMGUR_REFRESH_TOKEN)
+        config = {
+            'album': 'n7W1A',
+            'name': dist_name,
+            'title': time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+            'description': ''
+        }
+        
+        client.upload_from_path(path, config = config, anon = False)
+        os.remove(dist_path)
+    except:
+        pass
+
+    # Reply picture to user
+    wedding_cover = client.get_album_images('n7W1A')
+    for send_cover in wedding_cover:
+        if send_cover.name == dist_name:
+            message = ImageSendMessage(
+                original_content_url = send_cover.link,
+                preview_image_url = send_cover.link
+            )
+        line_bot_api.reply_message(event.reply_token, message)
+
+    # Insert picture link from imgur to database
+    try:
+        db = MySQLdb.connect(host = DB_CONFIG['host'], port = 3306, user = 'bnb_python', passwd = '12345678', db = 'bnb_wedding', charset = 'utf8mb4')
+        cursor = db.cursor()
+        sql = """INSERT INTO wedding_image(wedding_image_link) VALUES('""" + send_cover.link + """')"""
+        cursor.execute(sql)
+        db.commit()
+    except:
+        db.rollback()
+
+    db.close()
 
 if __name__ == "__main__":
-    # Download picture templates
-    image_url = "https://i.imgur.com/FeuDqBE.jpg"
-    urlretrieve(image_url, '/tmp/FeuDqBE.jpg')
-    image_url = "https://i.imgur.com/jjkP1OO.jpg"
-    urlretrieve(image_url, '/tmp/jjkP1OO.jpg')
-    image_url = "https://i.imgur.com/ryUiTQb.jpg"
-    urlretrieve(image_url, '/tmp/ryUiTQb.jpg')
-    image_url = "https://i.imgur.com/cUiNFmq.jpg"
-    urlretrieve(image_url, '/tmp/cUiNFmq.jpg')
-    image_url = "https://i.imgur.com/yK2mEQK.jpg"
-    urlretrieve(image_url, '/tmp/yK2mEQK.jpg')
-
-    client = ImgurClient(client_id, client_secret, access_token, refresh_token)
-    wedding_photos = client.get_album_images('Yjwsl')
-
-    app.run(host = '0.0.0.0', port = int(os.environ['PORT']))
+    # 下載模板圖片
+    for image_url, local_path in TEMPLATE_IMAGES['download_list']:
+        urlretrieve(image_url, local_path)
+    
+    # 獲取婚禮相簿照片
+    wedding_photos = imgur_client.get_album_images('Yjwsl')
+    
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
